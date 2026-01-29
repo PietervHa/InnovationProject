@@ -6,13 +6,13 @@ import sys
 import time
 
 # ==============================
-# 🚨 EMERGENCY STOP VARIABLES
+# EMERGENCY STOP VARIABLES
 # ==============================
 emergency_triggered = False
 face_detected = False
 
 # ==============================
-# 🚨 EMERGENCY STOP THREAD
+# EMERGENCY STOP THREAD
 # ==============================
 def emergency_listener(drone):
     """
@@ -20,12 +20,12 @@ def emergency_listener(drone):
     """
     global emergency_triggered
     keyboard.wait('e')
-    print("🚨 EMERGENCY STOP ACTIVATED!")
+    print("EMERGENCY STOP ACTIVATED!")
     emergency_triggered = True
     drone.emergency_stop()
 
 # ==============================
-# 👀 GEZICHTSDETECTIE THREAD
+# GEZICHTSDETECTIE THREAD
 # ==============================
 def face_detection_thread(drone):
     """
@@ -57,7 +57,7 @@ def face_detection_thread(drone):
             break
 
 # ==============================
-# 🟢 DRONE INITIALISATIE
+# DRONE INITIALISATIE
 # ==============================
 drone = Tello()
 drone.connect()
@@ -69,7 +69,7 @@ threading.Thread(target=emergency_listener, args=(drone,), daemon=True).start()
 threading.Thread(target=face_detection_thread, args=(drone,), daemon=True).start()
 
 # ==============================
-# 🔵 VLUCHTROUTE
+# VLUCHTROUTE
 # ==============================
 route = [
     ("takeoff", None),
@@ -84,11 +84,11 @@ print("Demo gestart — druk op 'E' voor noodstop, 'q' om venster te sluiten")
 
 for step in route:
     if emergency_triggered:
-        print("🛑 Vlucht afgebroken door noodstop!")
+        print("Vlucht afgebroken door noodstop!")
         break
 
     if face_detected:
-        print("🛑 Vlucht afgebroken door gezichtsdetectie! Drone vliegt achteruit en landt.")
+        print("Vlucht afgebroken door gezichtsdetectie! Drone vliegt achteruit en landt.")
         drone.move_back(40)
         time.sleep(1)
         drone.land()
@@ -120,7 +120,7 @@ if not face_detected and not emergency_triggered:
     print("Route voltooid zonder detectie")
 
 # ==============================
-# 🔴 OPRUIMEN
+# OPRUIMEN
 # ==============================
 cv2.destroyAllWindows()
 drone.streamoff()
