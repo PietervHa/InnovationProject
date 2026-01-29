@@ -48,11 +48,12 @@ src/
  └── drone_controller.py      # Hoofdklasse voor dronebesturing
 
 tests/
- ├── step4_basic_flight.py    # Basis opstijgen en landen
- ├── step5_movement_test.py   # Test van losse bewegingen
- ├── step6_route_test.py      # Automatische vluchtroute
- ├── step7_demo_flight.py     # Demo met noodstop
- └── final_demo_ai_reaction.py # Einddemo met AI-veiligheidsreactie
+ ├── Connectie_test.py  # test de connectie en geeft batterij percentage terug
+ ├── basic_flight.py    # Basis opstijgen en landen
+ ├── movement_test.py   # Test van losse bewegingen
+ ├── route_test.py      # Automatische vluchtroute
+ ├── demo_flight.py     # Demo met noodstop
+ └── Demo.py # Combinatie van alle functies
 ```
 
 ---
@@ -70,27 +71,27 @@ tests/
 
 ### Basis test (eerste test altijd hiermee beginnen)
 ```bash
-python tests/step4_basic_flight.py
+python tests/basic_flight.py
 ```
 
 ### Bewegingen testen
 ```bash
-python tests/step5_movement_test.py
+python tests/movement_test.py
 ```
 
 ### Automatische route
 ```bash
-python tests/step6_route_test.py
+python tests/route_test.py
 ```
 
 ### Demo met noodstop (druk op **E**)
 ```bash
-python tests/step7_demo_flight.py
+python tests/demo_flight.py
 ```
 
 ### Einddemo met AI-gezichtsdetectie
 ```bash
-python tests/final_demo_ai_reaction.py
+python tests/Demo.py
 ```
 
 ---
