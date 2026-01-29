@@ -8,12 +8,12 @@ import sys
 emergency_triggered = False
 
 # ==============================
-# 🚨 EMERGENCY STOP LISTENER
+# EMERGENCY STOP LISTENER
 # ==============================
 def listen_for_emergency(drone):
     global emergency_triggered
     keyboard.wait('e')
-    print("🚨 EMERGENCY STOP ACTIVATED")
+    print("EMERGENCY STOP ACTIVATED")
     emergency_triggered = True
     drone.emergency_stop()
 
