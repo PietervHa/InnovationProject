@@ -10,6 +10,9 @@ class DroneController:
         battery = self.drone.get_battery()
         print(f"Battery level: {battery}%")
 
+    def get_battery(self):
+        return self.drone.get_battery()
+
     def takeoff(self):
         self.drone.takeoff()
 
@@ -40,3 +43,11 @@ class DroneController:
             self.drone.rotate_clockwise(angle)
         else:
             self.drone.rotate_counter_clockwise(abs(angle))
+
+    def stream_on(self):
+        self.drone.streamon()
+
+    def get_frame(self):
+        frame_read = self.drone.get_frame_read()
+        return frame_read.frame
+
