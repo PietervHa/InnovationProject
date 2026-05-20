@@ -19,7 +19,10 @@ class DroneUI:
         self.connected = False
         self.video_running = False
 
-        # Latest frame storage — lock ensures thread-safe reads/writes
+        # Prevents two commands from running at the same time
+        self.command_lock = threading.Lock()
+
+        # Latest frame storage
         self.latest_frame = None
         self.frame_lock = threading.Lock()
 
@@ -45,6 +48,10 @@ class DroneUI:
 
         self.battery_label = tk.Label(right_frame, text="Battery: --%", font=("Arial", 13))
         self.battery_label.pack(pady=(0, 5))
+
+        # Status label shows when a command is in progress
+        self.status_label = tk.Label(right_frame, text="", font=("Arial", 9), fg="gray")
+        self.status_label.pack()
 
         tk.Button(right_frame, text="Connect Drone", command=self.connect_drone,
                   bg="lightblue", width=18).pack(pady=5)
@@ -80,6 +87,7 @@ class DroneUI:
 
         ttk.Separator(right_frame, orient="horizontal").pack(fill="x", pady=8)
 
+        # Emergency bypasses the command lock entirely — always fires immediately
         tk.Button(right_frame, text="EMERGENCY STOP", command=self.emergency,
                   bg="red", fg="white", font=("Arial", 10, "bold"), width=18).pack(pady=5)
 
@@ -101,6 +109,36 @@ class DroneUI:
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
+    def run_command(self, label, fn, *args):
+        """
+        Runs any drone command in a background thread.
+        Skips if a command is already running (non-blocking tryacquire).
+        Shows a status label while the command is in flight.
+        """
+        if not self.connected:
+            return
+
+        # tryacquire: if lock is taken, skip this command instead of queuing
+        if not self.command_lock.acquire(blocking=False):
+            self.set_status("Busy...")
+            return
+
+        def task():
+            try:
+                self.set_status(f"{label}...")
+                fn(*args)
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Command Error", str(e)))
+            finally:
+                self.command_lock.release()
+                self.set_status("")
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def set_status(self, text):
+        """Thread-safe status label update."""
+        self.root.after(0, lambda: self.status_label.config(text=text))
+
     def update_battery(self):
         while self.connected:
             try:
@@ -111,65 +149,54 @@ class DroneUI:
             time.sleep(5)
 
     def video_capture_loop(self):
-        """
-        Background thread: grabs and pre-processes frames as fast as possible.
-        Does all the heavy work (resize, color convert) so render_frame stays light.
-        """
+        """Background thread: grabs and pre-processes frames as fast as possible."""
         while self.video_running:
             try:
                 frame = self.drone.get_frame()
                 if frame is None:
                     continue
 
-                # Resize using INTER_NEAREST — fastest interpolation method
                 frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_NEAREST)
-                # Color convert in background so main thread doesn't have to
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
                 with self.frame_lock:
-                    self.latest_frame = frame  # Always overwrite with newest frame
+                    self.latest_frame = frame
 
             except Exception:
                 pass
 
     def render_frame(self):
-        """
-        Main thread: grabs the latest pre-processed frame and renders it.
-        Kept as lightweight as possible — only PIL conversion + label update.
-        """
+        """Main thread: renders the latest pre-processed frame."""
         if self.video_running:
             with self.frame_lock:
                 frame = self.latest_frame
 
             if frame is not None:
-                # Reuse the same PhotoImage object by updating it in-place
                 img = Image.fromarray(frame)
-                self._imgtk.paste(img)               # Much faster than creating a new PhotoImage
+                self._imgtk.paste(img)
                 self.video_label.configure(image=self._imgtk)
 
-            self.root.after(15, self.render_frame)   # ~66fps ceiling, smooth even at 30fps drone feed
+            self.root.after(15, self.render_frame)
 
-    # ===== DRONE COMMANDS =====
+    # ===== DRONE COMMANDS — all routed through run_command =====
 
     def takeoff(self):
-        if self.connected:
-            self.drone.takeoff()
+        self.run_command("Takeoff", self.drone.takeoff)
 
     def land(self):
-        if self.connected:
-            self.drone.land()
+        self.run_command("Landing", self.drone.land)
 
     def move(self, direction):
-        if self.connected:
-            self.drone.move(direction, 30)
+        self.run_command(f"Moving {direction}", self.drone.move, direction, 30)
 
     def rotate(self, angle):
-        if self.connected:
-            self.drone.rotate(angle)
+        label = "Rotating left" if angle < 0 else "Rotating right"
+        self.run_command(label, self.drone.rotate, angle)
 
     def emergency(self):
-        if self.connected:
-            self.drone.emergency_stop()
+        # Skips the lock — emergency must always fire instantly
+        threading.Thread(target=self.drone.emergency_stop, daemon=True).start()
+        self.set_status("EMERGENCY STOP")
 
 
 if __name__ == "__main__":
