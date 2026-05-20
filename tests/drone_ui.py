@@ -4,7 +4,7 @@ from PIL import Image, ImageTk
 import cv2
 import threading
 import time
-import queue
+import numpy as np
 
 from src.drone_controller import DroneController
 
@@ -19,10 +19,15 @@ class DroneUI:
         self.connected = False
         self.video_running = False
 
-        # Queue holds at most 1 frame — old frames are dropped, never stacked up
-        self.frame_queue = queue.Queue(maxsize=1)
+        # Latest frame storage — lock ensures thread-safe reads/writes
+        self.latest_frame = None
+        self.frame_lock = threading.Lock()
 
-        # ===== MAIN LAYOUT: left (video) + right (controls) =====
+        # Pre-built blank frame shown before drone connects
+        blank = np.zeros((480, 640, 3), dtype=np.uint8)
+        self._imgtk = ImageTk.PhotoImage(image=Image.fromarray(blank))
+
+        # ===== MAIN LAYOUT =====
         main_frame = tk.Frame(root)
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -31,7 +36,7 @@ class DroneUI:
         left_frame.pack(side="left", fill="both", expand=True)
         left_frame.pack_propagate(False)
 
-        self.video_label = tk.Label(left_frame, bg="black")
+        self.video_label = tk.Label(left_frame, bg="black", image=self._imgtk)
         self.video_label.pack(expand=True)
 
         # ===== RIGHT: CONTROLS =====
@@ -89,12 +94,9 @@ class DroneUI:
 
             messagebox.showinfo("Connected", "Drone connected & video started!")
 
-            # Background thread: grabs frames and puts them in the queue
             threading.Thread(target=self.video_capture_loop, daemon=True).start()
-            # Main thread: polls the queue and renders frames safely
-            self.root.after(30, self.render_frame)
-
             threading.Thread(target=self.update_battery, daemon=True).start()
+            self.root.after(15, self.render_frame)
 
         except Exception as e:
             messagebox.showerror("Error", str(e))
@@ -103,50 +105,49 @@ class DroneUI:
         while self.connected:
             try:
                 battery = self.drone.get_battery()
-                # Schedule the label update on the main thread
                 self.root.after(0, lambda b=battery: self.battery_label.config(text=f"Battery: {b}%"))
             except Exception:
                 pass
             time.sleep(5)
 
     def video_capture_loop(self):
-        """Runs in background thread — only grabs frames, never touches tkinter."""
+        """
+        Background thread: grabs and pre-processes frames as fast as possible.
+        Does all the heavy work (resize, color convert) so render_frame stays light.
+        """
         while self.video_running:
             try:
                 frame = self.drone.get_frame()
                 if frame is None:
                     continue
 
-                # Resize to 640x480 to reduce load
-                frame = cv2.resize(frame, (640, 480))
+                # Resize using INTER_NEAREST — fastest interpolation method
+                frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_NEAREST)
+                # Color convert in background so main thread doesn't have to
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                # Drop old frame if queue is full so we never fall behind
-                if self.frame_queue.full():
-                    try:
-                        self.frame_queue.get_nowait()
-                    except queue.Empty:
-                        pass
-
-                self.frame_queue.put_nowait(frame)
+                with self.frame_lock:
+                    self.latest_frame = frame  # Always overwrite with newest frame
 
             except Exception:
                 pass
 
     def render_frame(self):
-        """Runs on the main thread via root.after() — safe to update tkinter."""
+        """
+        Main thread: grabs the latest pre-processed frame and renders it.
+        Kept as lightweight as possible — only PIL conversion + label update.
+        """
         if self.video_running:
-            try:
-                frame = self.frame_queue.get_nowait()
-                img = Image.fromarray(frame)
-                imgtk = ImageTk.PhotoImage(image=img)
-                self.video_label.imgtk = imgtk
-                self.video_label.configure(image=imgtk)
-            except queue.Empty:
-                pass  # No new frame yet, just wait for next tick
+            with self.frame_lock:
+                frame = self.latest_frame
 
-            # Schedule next render in 30ms (~33 fps)
-            self.root.after(30, self.render_frame)
+            if frame is not None:
+                # Reuse the same PhotoImage object by updating it in-place
+                img = Image.fromarray(frame)
+                self._imgtk.paste(img)               # Much faster than creating a new PhotoImage
+                self.video_label.configure(image=self._imgtk)
+
+            self.root.after(15, self.render_frame)   # ~66fps ceiling, smooth even at 30fps drone feed
 
     # ===== DRONE COMMANDS =====
 
