@@ -4,6 +4,7 @@ from PIL import Image, ImageTk
 import cv2
 import threading
 import time
+import queue
 
 from src.drone_controller import DroneController
 
@@ -18,6 +19,9 @@ class DroneUI:
         self.connected = False
         self.video_running = False
 
+        # Queue holds at most 1 frame — old frames are dropped, never stacked up
+        self.frame_queue = queue.Queue(maxsize=1)
+
         # ===== MAIN LAYOUT: left (video) + right (controls) =====
         main_frame = tk.Frame(root)
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -25,7 +29,7 @@ class DroneUI:
         # ===== LEFT: VIDEO FEED =====
         left_frame = tk.Frame(main_frame, bg="black", width=640, height=480)
         left_frame.pack(side="left", fill="both", expand=True)
-        left_frame.pack_propagate(False)  # Keep fixed size even when empty
+        left_frame.pack_propagate(False)
 
         self.video_label = tk.Label(left_frame, bg="black")
         self.video_label.pack(expand=True)
@@ -34,17 +38,14 @@ class DroneUI:
         right_frame = tk.Frame(main_frame, padx=10)
         right_frame.pack(side="right", fill="y")
 
-        # Battery
         self.battery_label = tk.Label(right_frame, text="Battery: --%", font=("Arial", 13))
         self.battery_label.pack(pady=(0, 5))
 
-        # Connect
         tk.Button(right_frame, text="Connect Drone", command=self.connect_drone,
                   bg="lightblue", width=18).pack(pady=5)
 
         ttk.Separator(right_frame, orient="horizontal").pack(fill="x", pady=8)
 
-        # Takeoff / Land
         tk.Button(right_frame, text="Takeoff", command=self.takeoff,
                   bg="lightgreen", width=18).pack(pady=3)
         tk.Button(right_frame, text="Land", command=self.land,
@@ -52,7 +53,6 @@ class DroneUI:
 
         ttk.Separator(right_frame, orient="horizontal").pack(fill="x", pady=8)
 
-        # Movement grid
         movement_frame = tk.Frame(right_frame)
         movement_frame.pack(pady=5)
 
@@ -68,7 +68,6 @@ class DroneUI:
 
         ttk.Separator(right_frame, orient="horizontal").pack(fill="x", pady=8)
 
-        # Rotation
         tk.Button(right_frame, text="⟲ Rotate Left", command=lambda: self.rotate(-90),
                   width=18).pack(pady=3)
         tk.Button(right_frame, text="⟳ Rotate Right", command=lambda: self.rotate(90),
@@ -76,7 +75,6 @@ class DroneUI:
 
         ttk.Separator(right_frame, orient="horizontal").pack(fill="x", pady=8)
 
-        # Emergency
         tk.Button(right_frame, text="EMERGENCY STOP", command=self.emergency,
                   bg="red", fg="white", font=("Arial", 10, "bold"), width=18).pack(pady=5)
 
@@ -91,30 +89,64 @@ class DroneUI:
 
             messagebox.showinfo("Connected", "Drone connected & video started!")
 
+            # Background thread: grabs frames and puts them in the queue
+            threading.Thread(target=self.video_capture_loop, daemon=True).start()
+            # Main thread: polls the queue and renders frames safely
+            self.root.after(30, self.render_frame)
+
             threading.Thread(target=self.update_battery, daemon=True).start()
-            threading.Thread(target=self.video_loop, daemon=True).start()
 
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
     def update_battery(self):
         while self.connected:
-            battery = self.drone.get_battery()
-            self.battery_label.config(text=f"Battery: {battery}%")
+            try:
+                battery = self.drone.get_battery()
+                # Schedule the label update on the main thread
+                self.root.after(0, lambda b=battery: self.battery_label.config(text=f"Battery: {b}%"))
+            except Exception:
+                pass
             time.sleep(5)
 
-    def video_loop(self):
+    def video_capture_loop(self):
+        """Runs in background thread — only grabs frames, never touches tkinter."""
         while self.video_running:
-            frame = self.drone.get_frame()
+            try:
+                frame = self.drone.get_frame()
+                if frame is None:
+                    continue
 
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame)
-            imgtk = ImageTk.PhotoImage(image=img)
+                # Resize to 640x480 to reduce load
+                frame = cv2.resize(frame, (640, 480))
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            self.video_label.imgtk = imgtk
-            self.video_label.configure(image=imgtk)
+                # Drop old frame if queue is full so we never fall behind
+                if self.frame_queue.full():
+                    try:
+                        self.frame_queue.get_nowait()
+                    except queue.Empty:
+                        pass
 
-            time.sleep(0.03)
+                self.frame_queue.put_nowait(frame)
+
+            except Exception:
+                pass
+
+    def render_frame(self):
+        """Runs on the main thread via root.after() — safe to update tkinter."""
+        if self.video_running:
+            try:
+                frame = self.frame_queue.get_nowait()
+                img = Image.fromarray(frame)
+                imgtk = ImageTk.PhotoImage(image=img)
+                self.video_label.imgtk = imgtk
+                self.video_label.configure(image=imgtk)
+            except queue.Empty:
+                pass  # No new frame yet, just wait for next tick
+
+            # Schedule next render in 30ms (~33 fps)
+            self.root.after(30, self.render_frame)
 
     # ===== DRONE COMMANDS =====
 
