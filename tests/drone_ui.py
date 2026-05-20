@@ -9,15 +9,62 @@ import numpy as np
 from src.drone_controller import DroneController
 
 
+# ==============================
+# AUTO FLIGHT ROUTES
+# ==============================
+
+ROUTES = {
+    "Basic Route": [
+        ("takeoff", None),
+        ("move", ("forward", 50)),
+        ("rotate", 90),
+        ("move", ("right", 30)),
+        ("move", ("backward", 40)),
+        ("land", None),
+    ],
+    "Demo Route": [
+        ("takeoff", None),
+        ("move", ("forward", 40)),
+        ("rotate", 90),
+        ("move", ("left", 30)),
+        ("rotate", -90),
+        ("move", ("backward", 40)),
+        ("land", None),
+    ],
+    "Square Route": [
+        ("takeoff", None),
+        ("move", ("forward", 50)),
+        ("rotate", 90),
+        ("move", ("forward", 50)),
+        ("rotate", 90),
+        ("move", ("forward", 50)),
+        ("rotate", 90),
+        ("move", ("forward", 50)),
+        ("land", None),
+    ],
+    "Hover & Spin": [
+        ("takeoff", None),
+        ("move", ("up", 30)),
+        ("rotate", 90),
+        ("rotate", 90),
+        ("rotate", 90),
+        ("rotate", 90),
+        ("move", ("down", 20)),
+        ("land", None),
+    ],
+}
+
+
 class DroneUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Tello Drone Controller")
-        self.root.geometry("900x500")
+        self.root.geometry("900x600")
 
         self.drone = DroneController()
         self.connected = False
         self.video_running = False
+        self.route_running = False
 
         # Prevents two commands from running at the same time
         self.command_lock = threading.Lock()
@@ -84,6 +131,40 @@ class DroneUI:
                   width=18).pack(pady=3)
         tk.Button(right_frame, text="⟳ Rotate Right", command=lambda: self.rotate(90),
                   width=18).pack(pady=3)
+
+        ttk.Separator(right_frame, orient="horizontal").pack(fill="x", pady=8)
+
+        # ===== AUTO FLIGHT ROUTES =====
+        tk.Label(right_frame, text="Auto Flight Routes", font=("Arial", 10, "bold")).pack(pady=(0, 4))
+
+        self.route_var = tk.StringVar(value=list(ROUTES.keys())[0])
+        route_menu = ttk.Combobox(
+            right_frame,
+            textvariable=self.route_var,
+            values=list(ROUTES.keys()),
+            state="readonly",
+            width=16,
+        )
+        route_menu.pack(pady=3)
+
+        self.fly_route_btn = tk.Button(
+            right_frame,
+            text="▶ Fly Route",
+            command=self.fly_selected_route,
+            bg="#7EC8E3",
+            width=18,
+        )
+        self.fly_route_btn.pack(pady=3)
+
+        self.stop_route_btn = tk.Button(
+            right_frame,
+            text="■ Stop Route",
+            command=self.stop_route,
+            bg="#FFD580",
+            width=18,
+            state="disabled",
+        )
+        self.stop_route_btn.pack(pady=3)
 
         ttk.Separator(right_frame, orient="horizontal").pack(fill="x", pady=8)
 
@@ -178,6 +259,91 @@ class DroneUI:
 
             self.root.after(15, self.render_frame)
 
+    # ===== AUTO FLIGHT ROUTE EXECUTION =====
+
+    def fly_selected_route(self):
+        """Start the selected auto flight route in a background thread."""
+        if not self.connected:
+            messagebox.showwarning("Not Connected", "Connect the drone first.")
+            return
+        if self.route_running:
+            self.set_status("Route already running...")
+            return
+
+        route_name = self.route_var.get()
+        steps = ROUTES.get(route_name, [])
+
+        self.route_running = True
+        self.root.after(0, lambda: self.fly_route_btn.config(state="disabled"))
+        self.root.after(0, lambda: self.stop_route_btn.config(state="normal"))
+
+        threading.Thread(target=self._execute_route, args=(route_name, steps), daemon=True).start()
+
+    def _execute_route(self, route_name, steps):
+        """Background thread: executes each step of the route sequentially."""
+        try:
+            self.set_status(f"Route: {route_name} — starting…")
+            time.sleep(0.5)
+
+            for i, step in enumerate(steps):
+                if not self.route_running:
+                    self.set_status("Route stopped.")
+                    return
+
+                action, value = step
+                step_label = self._step_label(action, value)
+                self.set_status(f"[{i + 1}/{len(steps)}] {step_label}")
+
+                # Acquire the shared command lock so manual buttons are blocked during route
+                self.command_lock.acquire()
+                try:
+                    if action == "takeoff":
+                        self.drone.takeoff()
+                    elif action == "land":
+                        self.drone.land()
+                    elif action == "move":
+                        direction, distance = value
+                        self.drone.move(direction, distance)
+                    elif action == "rotate":
+                        self.drone.rotate(value)
+                finally:
+                    self.command_lock.release()
+
+                # Pause between steps — bail early if route was stopped
+                for _ in range(20):
+                    if not self.route_running:
+                        return
+                    time.sleep(0.1)
+
+            self.set_status(f"Route '{route_name}' complete!")
+
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Route Error", str(e)))
+        finally:
+            self.route_running = False
+            self.root.after(0, lambda: self.fly_route_btn.config(state="normal"))
+            self.root.after(0, lambda: self.stop_route_btn.config(state="disabled"))
+
+    def stop_route(self):
+        """Interrupt the running route after the current step finishes."""
+        self.route_running = False
+        self.set_status("Stopping route…")
+
+    @staticmethod
+    def _step_label(action, value):
+        """Human-readable label for a route step."""
+        if action == "takeoff":
+            return "Takeoff"
+        if action == "land":
+            return "Land"
+        if action == "move":
+            direction, distance = value
+            return f"Move {direction} {distance} cm"
+        if action == "rotate":
+            direction = "clockwise" if value > 0 else "counter-clockwise"
+            return f"Rotate {abs(value)}° {direction}"
+        return action
+
     # ===== DRONE COMMANDS — all routed through run_command =====
 
     def takeoff(self):
@@ -195,6 +361,7 @@ class DroneUI:
 
     def emergency(self):
         # Skips the lock — emergency must always fire instantly
+        self.route_running = False  # also abort any running route
         threading.Thread(target=self.drone.emergency_stop, daemon=True).start()
         self.set_status("EMERGENCY STOP")
 
